@@ -21,12 +21,12 @@ class BlockchainDataCollector:
             'vote_delay': [],
             'reward': [],
             'author_avg_efficiency': [],
-            'success': [],
             'author_reputation': [],
             'Post': [],
             'Author': [],
-            'like_efficiency': [],
             'author_avg_payout': [],
+            'like_efficiency': [],
+            'success': [],
         }
 
     @retry_on_blockchain_failure()

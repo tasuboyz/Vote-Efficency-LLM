@@ -2,6 +2,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 from ..settings.logger_config import logger
 from ..settings.plot_config import configure_plotting_style
 
@@ -52,8 +53,10 @@ class PerformanceAnalyzer:
         plt.ylabel('Count')
         
         if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path)
             plt.close()
+            logger.info(f"Efficiency distribution plot saved to {save_path}")
         else:
             plt.show()
 
@@ -68,8 +71,10 @@ class PerformanceAnalyzer:
         plt.ylabel('Efficiency (%)')
         
         if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path)
             plt.close()
+            logger.info(f"Delay vs efficiency plot saved to {save_path}")
         else:
             plt.show()
 
