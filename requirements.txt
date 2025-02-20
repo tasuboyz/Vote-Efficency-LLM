@@ -1,0 +1,10 @@
+beem
+tabulate
+pandas
+scikit-learn
+numpy
+openpyxl
+XGBoost
+requests
+seaborn
+matplotlib
