@@ -16,6 +16,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, f1_score, confusion_matrix
 from xgboost import XGBClassifier, XGBRegressor
 from reporting.performance_analyzer import PerformanceAnalyzer
+from reporting.excel_reporter import ExcelReporter
+
 
 # Import settings
 from settings.config import (
@@ -231,8 +233,6 @@ def train_regressor_model(X_train, y_train):
     reg_model = load_or_create_model(model_path, XGBRegressor, X_train, y_train)
     reg_model.save_model(model_path)
     return reg_model
-
-from reporting.excel_reporter import ExcelReporter
 
 def save_excel_reports(prediction_df, author_stats):
     """Save prediction results and author statistics to Excel file."""
