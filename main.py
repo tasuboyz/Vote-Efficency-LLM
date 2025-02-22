@@ -6,14 +6,16 @@ import json
 import os
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from beem.account import Account
 from beem import Steem, Hive
 from beem.nodelist import NodeList
 from beem.vote import Vote
 from beem.comment import Comment
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, f1_score, confusion_matrix
 from xgboost import XGBClassifier, XGBRegressor
+from reporting.performance_analyzer import PerformanceAnalyzer
 
 # Import settings
 from settings.config import (
@@ -164,17 +166,23 @@ def load_or_create_model(model_path, model_class, X_train, y_train):
 
 def process_data_for_mode(df, mode, clf_model=None, reg_model=None):
     """Process data based on operation mode."""
+    # Define features for classification (without vote_delay)
+    classification_features = ['author_avg_efficiency', 'author_reputation', 'author_avg_payout']
+    
     if mode == "TRAINING":
         # Training mode - use part of data for training, part for testing
-        X = df[['vote_delay', 'author_avg_efficiency', 'author_reputation', 'author_avg_payout']]
+        X = df[classification_features]
         y_clf = df['success']
         y_reg = df['like_efficiency']
 
         X_train, X_test, y_clf_train, y_clf_test = train_test_split(
             X, y_clf, test_size=TEST_SIZE, random_state=42
         )
+        
+        # For regression, include vote_delay
+        X_reg = df[classification_features + ['vote_delay']]
         X_reg_train, X_reg_test, y_reg_train, y_reg_test = train_test_split(
-            X, y_reg, test_size=TEST_SIZE, random_state=42
+            X_reg, y_reg, test_size=TEST_SIZE, random_state=42
         )
 
         # Train and save models
@@ -185,22 +193,19 @@ def process_data_for_mode(df, mode, clf_model=None, reg_model=None):
         generate_performance_reports(df, X_test, y_clf_test, clf_model, reg_model)
 
     elif mode == "TESTING":
-        # Testing mode - use all data for testing existing models
         if clf_model is None or reg_model is None:
             raise ValueError("Models must be provided for testing mode")
         
-        X = df[['vote_delay', 'author_avg_efficiency', 'author_reputation', 'author_avg_payout']]
+        X = df[classification_features]
         y_clf = df['success']
         
-        # Generate performance reports using all data
         generate_performance_reports(df, X, y_clf, clf_model, reg_model)
 
     elif mode == "PRODUCTION":
-        # Production mode - only make predictions, no performance evaluation
         if clf_model is None or reg_model is None:
             raise ValueError("Models must be provided for production mode")
         
-        X = df[['vote_delay', 'author_avg_efficiency', 'author_reputation', 'author_avg_payout']]
+        X = df[classification_features]
         generate_predictions_report(df, X, clf_model, reg_model)
 
 def train_classifier_model(X_train, y_train, X_test, y_test):
@@ -227,63 +232,24 @@ def train_regressor_model(X_train, y_train):
     reg_model.save_model(model_path)
     return reg_model
 
-class ExcelWriter:
-    def __init__(self, base_path, curator):
-        self.base_path = base_path
-        self.curator = curator
-        self.filepath = os.path.join(base_path, f'model_performance_{curator}.xlsx')
-
-    def save_to_excel(self, data_dict):
-        """
-        Save multiple dataframes to Excel sheets
-        data_dict: Dictionary with sheet_name: dataframe pairs
-        """
-        with pd.ExcelWriter(self.filepath) as writer:
-            for sheet_name, df in data_dict.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-        logger.info(f"Excel file saved successfully at: {self.filepath}")
-
-def prepare_rankings_data(author_stats):
-    """Prepare different rankings from author statistics."""
-    return {
-        'Top Authors by Efficiency': author_stats.nlargest(10, 'Avg_Efficiency'),
-        'Bottom Authors by Efficiency': author_stats.nsmallest(10, 'Avg_Efficiency'),
-        'Top Authors by Success Rate': author_stats.nlargest(10, 'Success_Rate'),
-        'Bottom Authors by Success Rate': author_stats.nsmallest(10, 'Success_Rate'),
-        'Top Authors by Payout': author_stats.nlargest(10, 'Avg_Payout'),
-        'Bottom Authors by Payout': author_stats.nsmallest(10, 'Avg_Payout'),
-        'Complete Author Stats': author_stats.sort_values('Avg_Efficiency', ascending=False)
-    }
+from reporting.excel_reporter import ExcelReporter
 
 def save_excel_reports(prediction_df, author_stats):
     """Save prediction results and author statistics to Excel file."""
-    # Initialize Excel writer
-    excel_writer = ExcelWriter('reports', CURATOR)
-    
-    # Prepare data dictionary for Excel sheets
-    data_dict = {
-        'Predictions': prediction_df,
-        **prepare_rankings_data(author_stats)
-    }
-    
-    # Save all data to Excel
-    excel_writer.save_to_excel(data_dict)
+    excel_reporter = ExcelReporter('reports', CURATOR)
+    excel_reporter.save_prediction_reports(prediction_df, author_stats)
 
 def save_production_report(prediction_df):
     """Save production predictions to Excel file."""
-    excel_writer = ExcelWriter('reports', CURATOR)
-    
-    # Prepare simplified production data
-    production_data = {
-        'Production Predictions': prediction_df[
-            ['Post', 'Author', 'vote_decision', 
-             'optimal_vote_delay_minutes', 'predicted_efficiency']
-        ]
-    }
-    
-    # Save production data
-    excel_writer.save_to_excel(production_data)
+    excel_reporter = ExcelReporter('reports', CURATOR)
+    excel_reporter.save_production_report(prediction_df)
 
+def analyze_performance_results(prediction_df):
+    """Analyze and generate detailed performance results."""
+    analyzer = PerformanceAnalyzer()
+    return analyzer.analyze_performance(prediction_df)
+
+# Modify generate_performance_reports to include performance analysis
 def generate_performance_reports(df, X_test, y_test, clf_model, reg_model):
     """Generate comprehensive performance reports."""
     predictions_list = make_predictions(X_test, df, clf_model, reg_model)
@@ -296,6 +262,9 @@ def generate_performance_reports(df, X_test, y_test, clf_model, reg_model):
     
     # Save reports
     save_excel_reports(prediction_df, author_stats)
+    
+    # Analyze and log detailed performance results
+    analyze_performance_results(prediction_df)
 
 def generate_predictions_report(df, X, clf_model, reg_model):
     """Generate production predictions report."""
@@ -319,8 +288,11 @@ def make_predictions(X_test, df, clf_model, reg_model):
     optimal_delay_history = df[df['success'] == 1].groupby('Author')['vote_delay'].mean().to_dict()
     
     for index, row in X_test.iterrows():
-        post_features = row.to_frame().T
+        # Create features without vote_delay for classification
+        post_features = row[['author_avg_efficiency', 'author_reputation', 'author_avg_payout']].to_frame().T
         author = df.loc[index, 'Author']
+        
+        # Make vote decision without considering delay
         vote_decision = clf_model.predict(post_features)[0]
         
         if vote_decision == 0:
@@ -336,7 +308,7 @@ def make_predictions(X_test, df, clf_model, reg_model):
             modified_features["vote_delay"] = optimal_delay
             predicted_eff = reg_model.predict(modified_features)[0]
             vote_decision_result = 1
-            
+        
         predictions_list.append({
             "vote_decision": vote_decision_result,
             "optimal_vote_delay_minutes": optimal_delay,

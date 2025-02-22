@@ -1,8 +1,8 @@
 """Configuration settings for the Vote Efficiency LLM."""
 
 # Blockchain configuration
-BLOCKCHAIN_CHOICE = "HIVE"  # Options: "HIVE" or "STEEM"
-CURATOR = "apoloo1"
+BLOCKCHAIN_CHOICE = "STEEM"  # Options: "HIVE" or "STEEM"
+CURATOR = "karja"
 
 # Node configurations
 STEEM_NODES = [
@@ -19,9 +19,9 @@ HIVE_NODES = [
 
 # Model configuration
 MODE_CHOICES = ["TRAINING", "TESTING", "PRODUCTION"]
-OPERATION_MODE = "TESTING"
+OPERATION_MODE = "TRAINING"  # Options: "TRAINING", "TESTING", "PRODUCTION"
 TEST_SIZE = 0.2
-MAX_RESULTS = 1000
+MAX_RESULTS = 3000
 
 # Directory configuration
 DIRECTORIES = ['models', 'reports']
