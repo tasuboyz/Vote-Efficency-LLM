@@ -144,7 +144,8 @@ def process_data_for_mode(df, mode, clf_model=None, reg_model=None):
                 efficiency=row['author_avg_efficiency'],
                 reputation=row['author_reputation'],
                 payout=row['author_avg_payout'],
-                model_version=model_version
+                model_version=model_version,
+                platform=BLOCKCHAIN_CHOICE  # Add platform information
             )
         
         # Training mode - use part of data for training, part for testing

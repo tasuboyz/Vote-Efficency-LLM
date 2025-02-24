@@ -17,11 +17,13 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Create authors table
+                # Create authors table with platform
                 cursor.execute('''
                 CREATE TABLE IF NOT EXISTS authors (
                     author_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    author_name TEXT UNIQUE NOT NULL
+                    author_name TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    UNIQUE(author_name, platform)
                 )
                 ''')
 
@@ -60,20 +62,22 @@ class DatabaseManager:
             logger.error(f"Database initialization error: {e}")
             raise
 
-    def update_author_stats(self, author_name, efficiency, reputation, payout, model_version):
+    def update_author_stats(self, author_name, efficiency, reputation, payout, model_version, platform):
         """Update author statistics in the database."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Insert or get author
+                # Insert or get author with platform
                 cursor.execute('''
-                INSERT OR IGNORE INTO authors (author_name)
-                VALUES (?)
-                ''', (author_name,))
+                INSERT OR IGNORE INTO authors (author_name, platform)
+                VALUES (?, ?)
+                ''', (author_name, platform))
                 
-                cursor.execute('SELECT author_id FROM authors WHERE author_name = ?', 
-                             (author_name,))
+                cursor.execute('''
+                SELECT author_id FROM authors 
+                WHERE author_name = ? AND platform = ?
+                ''', (author_name, platform))
                 author_id = cursor.fetchone()[0]
 
                 # Insert new statistics
@@ -113,7 +117,7 @@ class DatabaseManager:
             logger.error(f"Error updating author stats: {e}")
             raise
 
-    def get_author_stats(self, author_name):
+    def get_author_stats(self, author_name, platform):
         """Retrieve author statistics from database."""
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -122,6 +126,7 @@ class DatabaseManager:
                 cursor.execute('''
                 SELECT 
                     a.author_name,
+                    a.platform,
                     ag.avg_efficiency_all_time,
                     ag.reputation_all_time,
                     ag.avg_payout_all_time,
@@ -129,18 +134,19 @@ class DatabaseManager:
                     ag.last_updated
                 FROM authors a
                 JOIN aggregated_statistics ag ON a.author_id = ag.author_id
-                WHERE a.author_name = ?
-                ''', (author_name,))
+                WHERE a.author_name = ? AND a.platform = ?
+                ''', (author_name, platform))
                 
                 result = cursor.fetchone()
                 if result:
                     return {
                         'author_name': result[0],
-                        'avg_efficiency': result[1],
-                        'reputation': result[2],
-                        'avg_payout': result[3],
-                        'total_trainings': result[4],
-                        'last_updated': result[5]
+                        'platform': result[1],
+                        'avg_efficiency': result[2],
+                        'reputation': result[3],
+                        'avg_payout': result[4],
+                        'total_trainings': result[5],
+                        'last_updated': result[6]
                     }
                 return None
 
