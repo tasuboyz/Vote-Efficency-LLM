@@ -367,27 +367,6 @@ def generate_author_statistics(df):
     
     return author_stats
 
-def load_models():
-    """Load existing models if available."""
-    try:
-        clf_model = XGBClassifier()
-        reg_model = XGBRegressor()
-        
-        clf_path = os.path.join('models', 'classifier_model.json')
-        reg_path = os.path.join('models', 'regressor_model.json')
-        
-        if os.path.exists(clf_path) and os.path.exists(reg_path):
-            clf_model.load_model(clf_path)
-            reg_model.load_model(reg_path)
-            logger.info("Successfully loaded existing models")
-            return clf_model, reg_model
-        else:
-            logger.error("Model files not found")
-            return None, None
-    except Exception as e:
-        logger.error(f"Error loading models: {e}")
-        return None, None
-
 # Modify the main function to properly handle models
 def main():
     if OPERATION_MODE not in MODE_CHOICES:
@@ -398,7 +377,7 @@ def main():
     # Load models if needed
     clf_model, reg_model = None, None
     if OPERATION_MODE in ["TESTING", "PRODUCTION"]:
-        clf_model, reg_model = load_models()
+        clf_model, reg_model = load_or_create_model()
         if clf_model is None or reg_model is None:
             logger.error("Required models not found for testing/production mode")
             return
