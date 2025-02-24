@@ -166,12 +166,28 @@ def load_or_create_model(model_path, model_class, X_train, y_train):
         logger.info("Created new model due to error loading existing one")
         return model
 
+from database.db_manager import DatabaseManager
+
 def process_data_for_mode(df, mode, clf_model=None, reg_model=None):
     """Process data based on operation mode."""
+    # Initialize database manager
+    db_manager = DatabaseManager()
+    
     # Define features for classification (without vote_delay)
     classification_features = ['author_avg_efficiency', 'author_reputation', 'author_avg_payout']
     
     if mode == "TRAINING":
+        # Save author statistics to database
+        model_version = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for _, row in df.iterrows():
+            db_manager.update_author_stats(
+                author_name=row['Author'],
+                efficiency=row['author_avg_efficiency'],
+                reputation=row['author_reputation'],
+                payout=row['author_avg_payout'],
+                model_version=model_version
+            )
+        
         # Training mode - use part of data for training, part for testing
         X = df[classification_features]
         y_clf = df['success']
@@ -446,8 +462,10 @@ def main():
 
     # Collect historical data
     count = 0
-    for h in account.history_reverse():
-        if h['type'] == 'curation_reward':
+    try:
+        history_data, blockchain = get_account_history(account, blockchain)
+        
+        for h in history_data:
             try:
                 # Extract post info
                 author = h.get('comment_author') or h.get('author')
@@ -466,13 +484,13 @@ def main():
                 for key, value in post_data.items():
                     data[key].append(value)
 
-                count += 1
-                if count >= MAX_RESULTS:
-                    break
-
             except Exception as e:
                 logger.error(f"Error processing {post_identifier}: {str(e)}")
                 continue
+                
+    except Exception as e:
+        logger.error(f"Fatal error in history collection: {str(e)}")
+        return
 
     logger.info("Data collection completed. Starting model processing...")
 
@@ -492,7 +510,7 @@ def collect_post_data(post, history, author, post_identifier, curator, blockchai
     avg_payout = update_payout_average(author, author_payout_token_dollar, author_payout_dict)
 
     # Calculate times
-    op_time = datetime.strptime(history['timestamp'], '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)
+    # op_time = datetime.strptime(history['timestamp'], '%Y-%m-%dT%H%M:%S').replace(tzinfo=timezone.utc)
     post_creation_time = post['created']
 
     # Get vote data
@@ -527,6 +545,60 @@ def collect_post_data(post, history, author, post_identifier, curator, blockchai
         'like_efficiency': efficiency,
         'author_avg_payout': avg_payout
     }
+
+# Aggiungi questa funzione dopo la definizione dei decoratori esistenti
+def get_account_history(account, blockchain, max_retries=3, delay=1):
+    """Get account history with retry logic for node failures and node switching."""
+    for attempt in range(max_retries):
+        try:
+            history_data = []
+            curation_count = 0
+            
+            for h in account.history_reverse():
+                if h['type'] == 'curation_reward':
+                    history_data.append(h)
+                    curation_count += 1
+                    if curation_count >= MAX_RESULTS:
+                        logger.info(f"Collected {curation_count} curation rewards")
+                        return history_data, blockchain
+                        
+            logger.info(f"Collected all available curation rewards: {curation_count}")
+            return history_data, blockchain
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Failed to get account history after {max_retries} attempts: {e}")
+                raise
+            
+            logger.warning(f"Failed to get account history, retrying with new node... ({attempt + 1}/{max_retries})")
+            time.sleep(delay)
+            
+            try:
+                # Get a new working node, excluding the current one
+                current_node = account.blockchain.rpc.url
+                nodes = HIVE_NODES if BLOCKCHAIN_CHOICE == "HIVE" else STEEM_NODES
+                working_nodes = [node for node in nodes if node != current_node and test_node(node)]
+                
+                if not working_nodes:
+                    logger.error("No alternative working nodes found")
+                    continue
+                
+                # Create new blockchain instance with new node
+                new_node = random.choice(working_nodes)
+                new_blockchain = Hive(node=new_node) if BLOCKCHAIN_CHOICE == "HIVE" else Steem(node=new_node)
+                new_account = Account(CURATOR, blockchain_instance=new_blockchain)
+                
+                logger.info(f"Switched to new node: {new_node}")
+                
+                # Update references for future operations
+                account = new_account
+                blockchain = new_blockchain
+                
+            except Exception as node_error:
+                logger.warning(f"Failed to switch node: {str(node_error)}")
+                continue
+    
+    raise Exception(f"Failed to get account history after {max_retries} attempts with different nodes")
 
 if __name__ == "__main__":
     main()

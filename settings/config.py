@@ -2,7 +2,7 @@
 
 # Blockchain configuration
 BLOCKCHAIN_CHOICE = "STEEM"  # Options: "HIVE" or "STEEM"
-CURATOR = "karja"
+CURATOR = "tasuboyz"
 
 # Node configurations
 STEEM_NODES = [
@@ -19,7 +19,7 @@ HIVE_NODES = [
 
 # Model configuration
 MODE_CHOICES = ["TRAINING", "TESTING", "PRODUCTION"]
-OPERATION_MODE = "TRAINING"  # Options: "TRAINING", "TESTING", "PRODUCTION"
+OPERATION_MODE = "TESTING"  # Options: "TRAINING", "TESTING", "PRODUCTION"
 TEST_SIZE = 0.2
 MAX_RESULTS = 3000
 
