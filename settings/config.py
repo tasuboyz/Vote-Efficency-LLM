@@ -6,8 +6,8 @@ CURATOR = "karja"
 
 # Node configurations
 STEEM_NODES = [
-    "https://api.steemit.com",
-    "https://api.justyy.com",
+    # "https://api.steemit.com",
+    # "https://api.justyy.com",
     "https://api.moecki.online"
 ]
 
