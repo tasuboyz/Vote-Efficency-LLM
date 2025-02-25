@@ -27,3 +27,6 @@ MAX_RESULTS = 3000
 DIRECTORIES = ['models', 'reports']
 MODEL_DIR = 'models'
 REPORT_DIR = 'reports'
+
+steem_domain = 'https://steemit.com'
+hive_domain = 'https://peakd.com'

@@ -18,18 +18,17 @@ from xgboost import XGBClassifier, XGBRegressor
 from reporting.performance_analyzer import PerformanceAnalyzer
 from reporting.excel_reporter import ExcelReporter
 
-
-# Import settings
 from settings.config import (
     BLOCKCHAIN_CHOICE, CURATOR, STEEM_NODES, HIVE_NODES,
     MODE_CHOICES, OPERATION_MODE, TEST_SIZE, MAX_RESULTS,
     DIRECTORIES, MODEL_DIR, REPORT_DIR
 )
+
 from settings.logging_config import logger
-from utils.beem_requests import (
-    convert_vests_to_power, test_node, get_working_node, 
-    switch_to_backup_node, get_account_history
-)
+from utils.beem_requests import BlockchainConnector
+from database.db_manager import DatabaseManager
+
+blockchain_connector = BlockchainConnector(BLOCKCHAIN_CHOICE)
 
 def update_efficiency_average(author, current_efficiency, author_efficiency_dict):
     """Aggiorna l'efficienza media di un autore."""
@@ -124,8 +123,6 @@ def load_or_create_model(model_path=None, model_class=None, X_train=None, y_trai
         model.fit(X_train, y_train)
         logger.info("Created new model due to error loading existing one")
         return model
-
-from database.db_manager import DatabaseManager
 
 def process_data_for_mode(df, mode, clf_model=None, reg_model=None):
     """Process data based on operation mode."""
@@ -344,16 +341,9 @@ def main():
     
     # Initialize blockchain connection
     try:
-        if BLOCKCHAIN_CHOICE == "HIVE":
-            working_node = get_working_node("HIVE")
-            blockchain = Hive(node=working_node)
-            power_symbol = "HP"
-        else:
-            working_node = get_working_node("STEEM")
-            blockchain = Steem(node=working_node)
-            power_symbol = "SP"
-        
-        logger.info(f"Connected to {BLOCKCHAIN_CHOICE} node: {working_node}")
+        blockchain = blockchain_connector.blockchain
+        power_symbol = blockchain_connector.power_symbol
+        logger.info(f"Connected to {BLOCKCHAIN_CHOICE} node: {blockchain_connector.working_node}")
     except Exception as e:
         logger.error(f"Failed to initialize blockchain connection: {str(e)}")
         return
@@ -372,7 +362,7 @@ def main():
                         logger.warning(f"Operation failed, retrying... ({attempt + 1}/{max_retries})")
                         time.sleep(delay)
                         try:
-                            new_node = get_working_node(BLOCKCHAIN_CHOICE)
+                            new_node = blockchain_connector.get_working_node(BLOCKCHAIN_CHOICE)
                             blockchain = Hive(node=new_node) if BLOCKCHAIN_CHOICE == "HIVE" else Steem(node=new_node)
                             logger.info(f"Switched to new node: {new_node}")
                         except Exception as e:
@@ -402,7 +392,7 @@ def main():
     # Collect historical data
     count = 0
     try:
-        history_data, blockchain = get_account_history(account, blockchain)
+        history_data, blockchain = blockchain_connector.get_account_history(CURATOR)
         
         for h in history_data:
             try:
@@ -454,7 +444,7 @@ def collect_post_data(post, history, author, post_identifier, curator, blockchai
 
     # Get vote data
     reward_amount_vests = float(history['reward']['amount']) / 1e6
-    reward_amount = convert_vests_to_power(reward_amount_vests, blockchain)
+    reward_amount = blockchain_connector.convert_vests_to_power(reward_amount_vests)
     
     vote_identifier = f"{post_identifier}|{curator}"
     vote = get_vote_data(vote_identifier)
@@ -464,7 +454,7 @@ def collect_post_data(post, history, author, post_identifier, curator, blockchai
     
     # Calculate weights and efficiency
     weight = vote.weight / (100 if isinstance(blockchain, Steem) else 1000000000)
-    teoric_reward = convert_vests_to_power(weight, blockchain)
+    teoric_reward = blockchain_connector.convert_vests_to_power(weight)
     vote_value = teoric_reward * 2
     efficiency = (((reward_amount - teoric_reward) / teoric_reward) * 100) if vote_value > 0 else 0
     

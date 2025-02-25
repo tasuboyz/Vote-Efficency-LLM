@@ -2,123 +2,151 @@ import time
 import random
 import requests
 from beem import Steem, Hive
+from beem.account import Account
 from settings.config import HIVE_NODES, STEEM_NODES, BLOCKCHAIN_CHOICE, MAX_RESULTS
 from settings.logging_config import logger
-from beem.account import Account
+from beem.comment import Comment
 
-def convert_vests_to_power(amount, blockchain_instance):
-    """Convert vesting shares to HP/SP based on blockchain type."""
-    try:
-        if isinstance(blockchain_instance, Hive):
-            return blockchain_instance.vests_to_hp(float(amount))
-        elif isinstance(blockchain_instance, Steem):
-            return blockchain_instance.vests_to_sp(float(amount))
-        else:
-            logger.error("Unsupported blockchain")
-            return 0
-    except Exception as e:
-        logger.error(f"Error converting vesting shares to power: {e}")
-        return 0
+class BlockchainConnector:
+    def __init__(self, blockchain_type="HIVE"):
+        """Initialize blockchain connector with specified type."""
+        self.blockchain_type = blockchain_type
+        self.nodes = HIVE_NODES if blockchain_type == "HIVE" else STEEM_NODES
+        self.working_node = self.get_working_node()
+        self.blockchain = self._initialize_blockchain()
+        self.power_symbol = "HP" if blockchain_type == "HIVE" else "SP"
 
-def test_node(node_url, blockchain_type="HIVE"):
-    """Test if a node is responsive and functioning correctly."""
-    try:
-        headers = {'Content-Type': 'application/json'}
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "condenser_api.get_dynamic_global_properties",
-            "params": [],
-            "id": 1
-        }
-        
-        response = requests.post(node_url, json=payload, headers=headers, timeout=5)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'result' in result:
-                logger.info(f"Node {node_url} is working properly")
-                return True
-            
-        logger.warning(f"Node {node_url} returned invalid response")
-        return False
-        
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"Node {node_url} test failed: {str(e)}")
-        return False
+    def _initialize_blockchain(self):
+        """Initialize blockchain instance with working node."""
+        return Hive(node=self.working_node) if self.blockchain_type == "HIVE" else Steem(node=self.working_node)
 
-def get_working_node(blockchain_type="HIVE"):
-    """Get a working node from the configured list with fallback mechanism."""
-    nodes = HIVE_NODES if blockchain_type == "HIVE" else STEEM_NODES
-    working_nodes = []
-    
-    for node in nodes:
-        if test_node(node, blockchain_type):
-            working_nodes.append(node)
-    
-    if not working_nodes:
-        raise Exception(f"No working {blockchain_type} nodes found!")
-    
-    selected_node = random.choice(working_nodes)
-    logger.info(f"Selected {blockchain_type} node: {selected_node}")
-    return selected_node
-
-def switch_to_backup_node(current_node, blockchain_type="HIVE"):
-    """Switch to a different working node, avoiding the current one."""
-    nodes = HIVE_NODES if blockchain_type == "HIVE" else STEEM_NODES
-    backup_nodes = [node for node in nodes if node != current_node]
-    
-    for node in backup_nodes:
-        if test_node(node, blockchain_type):
-            logger.info(f"Switching from {current_node} to backup node: {node}")
-            return node
-    
-    raise Exception(f"No working backup {blockchain_type} nodes available!")
-
-def get_account_history(account, blockchain, max_retries=3, delay=1):
-    """Get account history with retry logic for node failures and node switching."""
-    for attempt in range(max_retries):
+    def convert_vests_to_power(self, amount):
+        """Convert vesting shares to HP/SP based on blockchain type."""
         try:
-            history_data = []
-            curation_count = 0
-            
-            for h in account.history_reverse():
-                if h['type'] == 'curation_reward':
-                    history_data.append(h)
-                    curation_count += 1
-                    if curation_count >= MAX_RESULTS:
-                        logger.info(f"Collected {curation_count} curation rewards")
-                        return history_data, blockchain
-                        
-            logger.info(f"Collected all available curation rewards: {curation_count}")
-            return history_data, blockchain
-            
+            if isinstance(self.blockchain, Hive):
+                return self.blockchain.vests_to_hp(float(amount))
+            elif isinstance(self.blockchain, Steem):
+                return self.blockchain.vests_to_sp(float(amount))
+            else:
+                logger.error("Unsupported blockchain")
+                return 0
         except Exception as e:
-            if attempt == max_retries - 1:
-                logger.error(f"Failed to get account history after {max_retries} attempts: {e}")
-                raise
+            logger.error(f"Error converting vesting shares to power: {e}")
+            return 0
+
+    def test_node(self, node_url):
+        """Test if a node is responsive and functioning correctly."""
+        try:
+            headers = {'Content-Type': 'application/json'}
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "condenser_api.get_dynamic_global_properties",
+                "params": [],
+                "id": 1
+            }
             
-            logger.warning(f"Failed to get account history, retrying with new node... ({attempt + 1}/{max_retries})")
-            time.sleep(delay)
+            response = requests.post(node_url, json=payload, headers=headers, timeout=5)
             
+            if response.status_code == 200:
+                result = response.json()
+                if 'result' in result:
+                    logger.info(f"Node {node_url} is working properly")
+                    return True
+                
+            logger.warning(f"Node {node_url} returned invalid response")
+            return False
+            
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Node {node_url} test failed: {str(e)}")
+            return False
+
+    def get_working_node(self):
+        """Get a working node from the configured list with fallback mechanism."""
+        working_nodes = []
+        
+        for node in self.nodes:
+            if self.test_node(node):
+                working_nodes.append(node)
+        
+        if not working_nodes:
+            raise Exception(f"No working {self.blockchain_type} nodes found!")
+        
+        selected_node = random.choice(working_nodes)
+        logger.info(f"Selected {self.blockchain_type} node: {selected_node}")
+        return selected_node
+
+    def switch_to_backup_node(self):
+        """Switch to a different working node, avoiding the current one."""
+        backup_nodes = [node for node in self.nodes if node != self.working_node]
+        random.shuffle(backup_nodes)  # Randomize the order of backup nodes
+        working_backup_nodes = []
+        
+        # First collect all working backup nodes
+        for node in backup_nodes:
+            if self.test_node(node):
+                working_backup_nodes.append(node)
+        
+        if not working_backup_nodes:
+            raise Exception(f"No working backup {self.blockchain_type} nodes available!")
+        
+        # Select a random working backup node
+        new_node = random.choice(working_backup_nodes)
+        logger.info(f"Switching from {self.working_node} to backup node: {new_node}")
+        self.working_node = new_node
+        self.blockchain = self._initialize_blockchain()
+        return True
+
+    def get_account_history(self, account_name, max_retries=3, delay=1):
+        """Get account history with retry logic for node failures and node switching."""
+        # Create a list of all available nodes except current one
+        available_nodes = [node for node in self.nodes if node != self.working_node]
+        # Add current node at the beginning
+        all_nodes = [self.working_node] + available_nodes
+        
+        for node in all_nodes:
             try:
-                current_node = account.blockchain.rpc.url
-                nodes = HIVE_NODES if BLOCKCHAIN_CHOICE == "HIVE" else STEEM_NODES
-                working_nodes = [node for node in nodes if node != current_node and test_node(node)]
+                # Switch to new node
+                self.working_node = node
+                self.blockchain = self._initialize_blockchain()
+                account = Account(account_name, blockchain_instance=self.blockchain)
+                logger.info(f"Trying node: {node}")
                 
-                if not working_nodes:
-                    logger.error("No alternative working nodes found")
-                    continue
+                history_data = []
+                curation_count = 0
                 
-                new_node = random.choice(working_nodes)
-                new_blockchain = Hive(node=new_node) if BLOCKCHAIN_CHOICE == "HIVE" else Steem(node=new_node)
-                new_account = Account(account.name, blockchain_instance=new_blockchain)
+                for h in account.history_reverse():
+                    if h['type'] == 'curation_reward':
+                        history_data.append(h)
+                        curation_count += 1
+                        if curation_count >= MAX_RESULTS:
+                            logger.info(f"Collected {curation_count} curation rewards from {node}")
+                            return history_data, self.blockchain
                 
-                logger.info(f"Switched to new node: {new_node}")
-                account = new_account
-                blockchain = new_blockchain
+                logger.info(f"Collected all available curation rewards: {curation_count} from {node}")
+                return history_data, self.blockchain
                 
-            except Exception as node_error:
-                logger.warning(f"Failed to switch node: {str(node_error)}")
+            except Exception as e:
+                logger.warning(f"Failed to get account history from node {node}: {str(e)}")
                 continue
+        
+        raise Exception(f"Failed to get account history after trying all nodes")
     
-    raise Exception(f"Failed to get account history after {max_retries} attempts with different nodes")
+    def get_account_info(self, account_name):
+        return Account(account_name, blockchain_instance=self.blockchain)
+    
+    def calculate_voting_power(self, account_name):
+        accout = Account(account_name, blockchain_instance=self.blockchain)
+        return accout.get_voting_power()
+    
+    def get_steem_author(self, post_link):
+        return post_link.split("/")[3]
+    
+    def get_permlink(self, post_url):
+        comment = Comment(post_url, blockchain_instance=self.blockchain)
+        permlink = comment.permlink
+        return permlink
+    
+    def get_author(self, post_url):
+        comment = Comment(post_url, blockchain_instance=self.blockchain)
+        author = comment.author
+        return author
