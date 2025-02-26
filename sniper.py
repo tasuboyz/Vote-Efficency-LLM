@@ -8,7 +8,7 @@ from collections import defaultdict
 from settings.logging_config import logger
 from settings.config import (
     BLOCKCHAIN_CHOICE, STEEM_NODES, HIVE_NODES, 
-    CURATOR, MODE_CHOICES, OPERATION_MODE
+    CURATOR, MODE_CHOICES, OPERATION_MODE, steem_domain, hive_domain
 )
 from utils.beem_requests import BlockchainConnector
 from database.db_manager import DatabaseManager
@@ -47,12 +47,11 @@ class VoteSniper:
 
         for username in usernames:
             try:
-                # Get user's recent posts
-                account = self.beem.get_account_info(username)
-                # blog_posts = account.get_blog()[:1]  # Get most recent post
-                post = account.get_blog()[00]
+                post = self.beem.get_author_post(username, platform)
                 
                 created_time = post['created']
+                created_time = datetime.strptime(post['created'], '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)
+                
                 post_age = current_time - created_time
                 age_minutes = post_age.total_seconds() / 60
                 
@@ -131,17 +130,19 @@ class VoteSniper:
             try:
                 curator = self.steem_curator if platform == "STEEM" else self.hive_curator
                 voting_power = self.beem.calculate_voting_power(curator)
+                url = f"{steem_domain}{post['url']}" if platform == "STEEM" else f"{hive_domain}{post['url']}"
                 
                 message = (
                     f"[{platform}] Found voteable post!\n"
                     f"Author: {post['author']}\n"
                     f"VP: {voting_power}%\n"
-                    f"URL: {post['url']}"
+                    f"URL: {url}"
                 )
                 self.send_telegram_message(self.TOKEN, self.admin_id, message)
                 
                 if voting_power > 89:
-                    self._execute_vote(post, platform, curator)
+                    permlink = self.beem.get_permlink(url)
+                    self.beem.like_steem_post(voter=curator, voted=post['author'], permlink=permlink, weight=100)
                 else:
                     self.send_telegram_message(
                         self.TOKEN, 

@@ -7,6 +7,7 @@ from settings.config import HIVE_NODES, STEEM_NODES, BLOCKCHAIN_CHOICE, MAX_RESU
 from settings.logging_config import logger
 from beem.comment import Comment
 from settings.keys import steem_posting_key, hive_posting_key
+import json 
 
 class BlockchainConnector:
     def __init__(self, blockchain_type="HIVE"):
@@ -131,6 +132,19 @@ class BlockchainConnector:
                 continue
         
         raise Exception(f"Failed to get account history after trying all nodes")
+    
+    def get_author_post(self, author, platform):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "condenser_api.get_discussions_by_blog",
+            "params": [{"tag": author, "limit": 1}],
+            "id": 1
+        }
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(self.working_node, headers=headers, data=json.dumps(data), timeout=5)
+        response.raise_for_status()
+        result = response.json().get('result', [])
+        return result[0]
     
     def get_account_info(self, account_name):
         return Account(account_name, blockchain_instance=self.blockchain)
