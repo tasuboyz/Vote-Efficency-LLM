@@ -29,6 +29,7 @@ from utils.beem_requests import BlockchainConnector
 from database.db_manager import DatabaseManager
 
 blockchain_connector = BlockchainConnector(BLOCKCHAIN_CHOICE)
+db_manager = DatabaseManager()
 
 def update_efficiency_average(author, current_efficiency, author_efficiency_dict):
     """Aggiorna l'efficienza media di un autore."""
@@ -126,23 +127,29 @@ def load_or_create_model(model_path=None, model_class=None, X_train=None, y_trai
 
 def process_data_for_mode(df, mode, clf_model=None, reg_model=None):
     """Process data based on operation mode."""
-    # Initialize database manager
-    db_manager = DatabaseManager()
-    
-    # Define features for classification (without vote_delay)
     classification_features = ['author_avg_efficiency', 'author_reputation', 'author_avg_payout']
     
     if mode == "TRAINING":
-        # Save author statistics to database
+        # Save author statistics and voting delays to database
         model_version = datetime.now().strftime("%Y%m%d_%H%M%S")
         for _, row in df.iterrows():
+            # Update author stats
             db_manager.update_author_stats(
                 author_name=row['Author'],
                 efficiency=row['author_avg_efficiency'],
                 reputation=row['author_reputation'],
                 payout=row['author_avg_payout'],
                 model_version=model_version,
-                platform=BLOCKCHAIN_CHOICE  # Add platform information
+                platform=BLOCKCHAIN_CHOICE
+            )
+            
+            # Update voting delays
+            db_manager.update_voting_delay(
+                author_name=row['Author'],
+                platform=BLOCKCHAIN_CHOICE,
+                vote_delay=row['vote_delay'],
+                efficiency=row['like_efficiency'],
+                post_url=row['Post']
             )
         
         # Training mode - use part of data for training, part for testing
@@ -258,7 +265,6 @@ def generate_predictions_report(df, X, clf_model, reg_model):
 def make_predictions(X_test, df, clf_model, reg_model):
     """Make predictions using both classifier and regressor models."""
     predictions_list = []
-    optimal_delay_history = df[df['success'] == 1].groupby('Author')['vote_delay'].mean().to_dict()
     
     for index, row in X_test.iterrows():
         # Create features without vote_delay for classification
@@ -273,10 +279,11 @@ def make_predictions(X_test, df, clf_model, reg_model):
             optimal_delay = None
             predicted_eff = None
         else:
-            # Use historical optimal delay if available, otherwise use default
-            optimal_delay = int(optimal_delay_history.get(author, 1440))  # default 24h if no history
+            # Get optimal delay from database
+            optimal_delay_data = db_manager.get_optimal_delay(author, BLOCKCHAIN_CHOICE)
+            optimal_delay = optimal_delay_data['recent_good_delay'] if optimal_delay_data else 1440
             
-            # Predict efficiency with this delay
+            # Predict efficiency with optimal delay
             modified_features = post_features.copy()
             modified_features["vote_delay"] = optimal_delay
             predicted_eff = reg_model.predict(modified_features)[0]
@@ -383,10 +390,18 @@ def main():
     author_efficiency_dict = {}
     author_payout_dict = {}
     data = {
-        'voting_power': [], 'vote_delay': [], 'reward': [],
-        'efficiency': [], 'author_avg_efficiency': [], 'success': [],
-        'author_reputation': [], 'Post': [], 'Author': [],
-        'like_efficiency': [], 'author_avg_payout': []
+        'voting_power': [], 
+        'vote_delay': [], 
+        'reward': [],
+        'efficiency': [], 
+        'author_avg_efficiency': [], 
+        'success': [],
+        'author_reputation': [], 
+        'Post': [], 
+        'Author': [],
+        'like_efficiency': [], 
+        'author_avg_payout': [],
+        'optimal_delay': []  # Add this line
     }
 
     # Collect historical data
@@ -439,35 +454,44 @@ def collect_post_data(post, history, author, post_identifier, curator, blockchai
     avg_payout = update_payout_average(author, author_payout_token_dollar, author_payout_dict)
 
     # Calculate times
-    # op_time = datetime.strptime(history['timestamp'], '%Y-%m-%dT%H%M:%S').replace(tzinfo=timezone.utc)
     post_creation_time = post['created']
-
-    # Get vote data
-    reward_amount_vests = float(history['reward']['amount']) / 1e6
-    reward_amount = blockchain_connector.convert_vests_to_power(reward_amount_vests)
-    
     vote_identifier = f"{post_identifier}|{curator}"
     vote = get_vote_data(vote_identifier)
     vote_time = vote.time
-    vote_percent = vote['percent'] / 100
     age = (vote_time - post_creation_time).total_seconds()
+    vote_delay_minutes = age / 60
     
-    # Calculate weights and efficiency
+    # Calculate efficiency
+    reward_amount_vests = float(history['reward']['amount']) / 1e6
+    reward_amount = blockchain_connector.convert_vests_to_power(reward_amount_vests)
     weight = vote.weight / (100 if isinstance(blockchain, Steem) else 1000000000)
     teoric_reward = blockchain_connector.convert_vests_to_power(weight)
     vote_value = teoric_reward * 2
     efficiency = (((reward_amount - teoric_reward) / teoric_reward) * 100) if vote_value > 0 else 0
     
+    db_manager.update_voting_delay(
+        author_name=author,
+        platform=BLOCKCHAIN_CHOICE,
+        vote_delay=vote_delay_minutes,
+        efficiency=efficiency,
+        post_url=post_identifier
+    )
+    
+    # Get optimal delay from database
+    optimal_delay_data = db_manager.get_optimal_delay(author, BLOCKCHAIN_CHOICE)
+    optimal_delay = optimal_delay_data['recent_good_delay'] if optimal_delay_data else 1440
+    
     # Update author efficiency
     avg_efficiency = update_efficiency_average(author, efficiency, author_efficiency_dict)
     
     return {
-        'voting_power': vote_percent,
-        'vote_delay': age / 60,  # minutes
+        'voting_power': vote['percent'] / 100,
+        'vote_delay': vote_delay_minutes,
+        'optimal_delay': optimal_delay,
         'reward': reward_amount,
         'efficiency': efficiency,
         'author_avg_efficiency': avg_efficiency,
-        'success': 1 if efficiency > 50 else 0,
+        'success': 1 if efficiency > 80 else 0,
         'author_reputation': author_reputation,
         'Post': post_identifier,
         'Author': author,

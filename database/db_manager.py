@@ -41,7 +41,7 @@ class DatabaseManager:
                 )
                 ''')
 
-                # Create aggregated statistics table
+                # Create aggregated statistics table with optimal delay fields included
                 cursor.execute('''
                 CREATE TABLE IF NOT EXISTS aggregated_statistics (
                     author_id INTEGER,
@@ -50,8 +50,23 @@ class DatabaseManager:
                     avg_payout_all_time REAL,
                     total_trainings INTEGER,
                     last_updated TIMESTAMP,
+                    optimal_delay INTEGER DEFAULT 1440,
+                    best_efficiency REAL DEFAULT 0,
                     FOREIGN KEY (author_id) REFERENCES authors(author_id),
                     UNIQUE(author_id)
+                )
+                ''')
+
+                # Create voting_delays table
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS voting_delays (
+                    delay_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author_id INTEGER,
+                    vote_delay INTEGER,  -- in minutes
+                    efficiency REAL,
+                    post_url TEXT,
+                    voted_at TIMESTAMP,
+                    FOREIGN KEY (author_id) REFERENCES authors(author_id)
                 )
                 ''')
 
@@ -116,6 +131,82 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error updating author stats: {e}")
             raise
+
+    def update_voting_delay(self, author_name, platform, vote_delay, efficiency, post_url):
+        """Record a new voting delay and its efficiency."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get author_id
+                cursor.execute('''
+                SELECT author_id FROM authors 
+                WHERE author_name = ? AND platform = ?
+                ''', (author_name, platform))
+                result = cursor.fetchone()
+                
+                if result:
+                    author_id = result[0]
+                    
+                    # Insert new voting delay record
+                    cursor.execute('''
+                    INSERT INTO voting_delays 
+                    (author_id, vote_delay, efficiency, post_url, voted_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ''', (author_id, vote_delay, efficiency, post_url))
+                    
+                    # Update optimal delay if this vote was more efficient
+                    cursor.execute('''
+                    UPDATE aggregated_statistics
+                    SET optimal_delay = ?,
+                        best_efficiency = ?
+                    WHERE author_id = ? 
+                    AND (best_efficiency < ? OR best_efficiency IS NULL)
+                    ''', (vote_delay, efficiency, author_id, efficiency))
+                    
+                    conn.commit()
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error updating voting delay: {e}")
+            raise
+
+    def get_optimal_delay(self, author_name, platform):
+        """Get the optimal voting delay for an author."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                SELECT 
+                    a.author_name,
+                    ag.optimal_delay,
+                    ag.best_efficiency,
+                    (
+                        SELECT AVG(vd.vote_delay)
+                        FROM voting_delays vd
+                        WHERE vd.author_id = a.author_id
+                        AND vd.efficiency >= (ag.best_efficiency * 0.8)
+                        ORDER BY vd.voted_at DESC
+                        LIMIT 5
+                    ) as recent_good_delay
+                FROM authors a
+                JOIN aggregated_statistics ag ON a.author_id = ag.author_id
+                WHERE a.author_name = ? AND a.platform = ?
+                ''', (author_name, platform))
+                
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        'author_name': result[0],
+                        'optimal_delay': result[1],
+                        'best_efficiency': result[2],
+                        'recent_good_delay': result[3] or result[1]  # fallback to optimal if no recent
+                    }
+                return None
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting optimal delay: {e}")
+            return None
 
     def get_author_stats(self, author_name, platform):
         """Retrieve author statistics from database."""

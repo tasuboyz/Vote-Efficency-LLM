@@ -56,27 +56,41 @@ class VoteSniper:
                 age_minutes = post_age.total_seconds() / 60
                 
                 if age_minutes <= max_age_minutes and post['url'] not in self.published_posts:
-                    # Get post features for prediction
+                    # Get post features and optimal delay for prediction
                     author_stats = self.db.get_author_stats(username, platform)
+                    optimal_delay = self.db.get_optimal_delay(username, platform)
                     
-                    if author_stats:
+                    if author_stats and optimal_delay:
                         features = {
                             'author_avg_efficiency': author_stats['avg_efficiency'],
                             'author_reputation': author_stats['reputation'],
-                            'author_avg_payout': author_stats['avg_payout']
+                            'author_avg_payout': author_stats['avg_payout'],
+                            'vote_delay': optimal_delay['recent_good_delay']
                         }
                         
-                        # Make prediction
-                        vote_decision = self.clf_model.predict([list(features.values())])[0]
+                        # Make vote decision prediction
+                        clf_features = [features[f] for f in ['author_avg_efficiency', 'author_reputation', 'author_avg_payout']]
+                        vote_decision = self.clf_model.predict([clf_features])[0]
                         
+                        # If vote decision is positive, predict efficiency
                         if vote_decision == 1:
+                            reg_features = [features[f] for f in ['author_avg_efficiency', 'author_reputation', 'author_avg_payout', 'vote_delay']]
+                            predicted_efficiency = self.reg_model.predict([reg_features])[0]
+                            
                             post_links.append({
                                 'url': post['url'],
                                 'author': username,
-                                'created': created_time
+                                'created': created_time,
+                                'optimal_delay': optimal_delay['recent_good_delay'],
+                                'predicted_efficiency': predicted_efficiency,
+                                'best_historical_efficiency': optimal_delay['best_efficiency']
                             })
                             self.published_posts.add(post['url'])
-                            logger.info(f"Found voteable post: {post['url']}")
+                            logger.info(
+                                f"Found voteable post: {post['url']}\n"
+                                f"Optimal delay: {optimal_delay['recent_good_delay']} minutes\n"
+                                f"Predicted efficiency: {predicted_efficiency:.2f}%"
+                            )
                         
             except Exception as e:
                 logger.error(f"Error processing posts for {username}: {str(e)}")
@@ -132,17 +146,38 @@ class VoteSniper:
                 voting_power = self.beem.calculate_voting_power(curator)
                 url = f"{steem_domain}{post['url']}" if platform == "STEEM" else f"{hive_domain}{post['url']}"
                 
+                # Calculate when to vote based on optimal delay
+                created_time = post['created']
+                optimal_delay = post['optimal_delay']
+                target_vote_time = created_time + timedelta(minutes=optimal_delay)
+                time_until_vote = target_vote_time - datetime.now(timezone.utc)
+                minutes_until_vote = time_until_vote.total_seconds() / 60
+                
                 message = (
                     f"[{platform}] Found voteable post!\n"
                     f"Author: {post['author']}\n"
                     f"VP: {voting_power}%\n"
-                    f"URL: {url}"
+                    f"URL: {url}\n"
+                    f"Optimal delay: {optimal_delay} minutes\n"
+                    f"Predicted efficiency: {post['predicted_efficiency']:.2f}%\n"
+                    f"Best historical: {post['best_historical_efficiency']:.2f}%\n"
+                    f"Voting in: {minutes_until_vote:.1f} minutes"
                 )
                 self.send_telegram_message(self.TOKEN, self.admin_id, message)
                 
                 if voting_power > 89:
+                    if minutes_until_vote > 0:
+                        logger.info(f"Waiting {minutes_until_vote:.1f} minutes before voting...")
+                        time.sleep(minutes_until_vote * 60)
+                    
                     permlink = self.beem.get_permlink(url)
-                    self.beem.like_steem_post(voter=curator, voted=post['author'], permlink=permlink, weight=100)
+                    self.beem.like_steem_post(
+                        voter=curator,
+                        voted=post['author'],
+                        permlink=permlink,
+                        weight=100
+                    )
+                    logger.info(f"Voted on {url} after optimal delay")
                 else:
                     self.send_telegram_message(
                         self.TOKEN, 
