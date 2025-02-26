@@ -3,3 +3,4 @@
 /reports
 /models
 /database/author_stats.db
+/settings/keys.py

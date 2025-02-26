@@ -153,3 +153,51 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error retrieving author stats: {e}")
             raise
+
+    def get_all_authors(self, platform):
+        """
+        Get all authors and their statistics for a specific platform.
+        
+        Args:
+            platform (str): The platform to filter authors ("STEEM" or "HIVE")
+            
+        Returns:
+            list: List of dictionaries containing author information and statistics
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                SELECT 
+                    a.author_name,
+                    a.platform,
+                    ag.avg_efficiency_all_time,
+                    ag.reputation_all_time,
+                    ag.avg_payout_all_time,
+                    ag.total_trainings,
+                    ag.last_updated
+                FROM authors a
+                LEFT JOIN aggregated_statistics ag ON a.author_id = ag.author_id
+                WHERE a.platform = ?
+                AND ag.last_updated IS NOT NULL
+                ORDER BY ag.avg_efficiency_all_time DESC
+                ''', (platform,))
+                
+                columns = [
+                    'author_name', 'platform', 'avg_efficiency',
+                    'reputation', 'avg_payout', 'total_trainings',
+                    'last_updated'
+                ]
+                
+                results = []
+                for row in cursor.fetchall():
+                    author_data = dict(zip(columns, row))
+                    results.append(author_data)
+                
+                logger.info(f"Retrieved {len(results)} authors for {platform}")
+                return results
+
+        except sqlite3.Error as e:
+            logger.error(f"Error getting authors for {platform}: {e}")
+            return []

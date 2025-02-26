@@ -6,6 +6,7 @@ from beem.account import Account
 from settings.config import HIVE_NODES, STEEM_NODES, BLOCKCHAIN_CHOICE, MAX_RESULTS
 from settings.logging_config import logger
 from beem.comment import Comment
+from settings.keys import steem_posting_key, hive_posting_key
 
 class BlockchainConnector:
     def __init__(self, blockchain_type="HIVE"):
@@ -18,7 +19,7 @@ class BlockchainConnector:
 
     def _initialize_blockchain(self):
         """Initialize blockchain instance with working node."""
-        return Hive(node=self.working_node) if self.blockchain_type == "HIVE" else Steem(node=self.working_node)
+        return Hive(keys=[hive_posting_key], node=self.working_node) if self.blockchain_type == "HIVE" else Steem(keys=[steem_posting_key], node=self.working_node)
 
     def convert_vests_to_power(self, amount):
         """Convert vesting shares to HP/SP based on blockchain type."""
@@ -138,9 +139,6 @@ class BlockchainConnector:
         accout = Account(account_name, blockchain_instance=self.blockchain)
         return accout.get_voting_power()
     
-    def get_steem_author(self, post_link):
-        return post_link.split("/")[3]
-    
     def get_permlink(self, post_url):
         comment = Comment(post_url, blockchain_instance=self.blockchain)
         permlink = comment.permlink
@@ -150,3 +148,9 @@ class BlockchainConnector:
         comment = Comment(post_url, blockchain_instance=self.blockchain)
         author = comment.author
         return author
+    
+    def like_steem_post(self, voter, voted, permlink, weight=20):
+
+        account = Account(voter, blockchain_instance=self.blockchain)
+        comment = Comment(authorperm=f"@{voted}/{permlink}", blockchain_instance=self.blockchain)
+        comment.vote(weight, account=account)

@@ -6,166 +6,169 @@ from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from settings.logging_config import logger
-from settings.config import steem_domain, hive_domain
+from settings.config import (
+    BLOCKCHAIN_CHOICE, STEEM_NODES, HIVE_NODES, 
+    CURATOR, MODE_CHOICES, OPERATION_MODE
+)
 from utils.beem_requests import BlockchainConnector
-from command.basic.db import Database
+from database.db_manager import DatabaseManager
+from xgboost import XGBClassifier, XGBRegressor
 
-class SocialMediaPublisher:
+class VoteSniper:
     def __init__(self, config_path):
+        """Initialize vote sniper with configuration."""
         with open(config_path, 'r') as file:
             config = json.load(file)
-        self.db_path = config["db_path"]
-        self.nodes = config["nodes"]
+            
         self.admin_id = config["admin_id"]
         self.TOKEN = config["TOKEN"]
         self.steem_curator = config["steem_curator"]
-        self.steem_curator_posting_key = config["steem_curator_posting_key"]
         self.hive_curator = config["hive_curator"]
-        self.hive_curator_posting_key = config["hive_curator_posting_key"]
-        self.beem = BlockchainConnector()
+        
+        # Initialize blockchain connector and database
+        self.beem = BlockchainConnector(BLOCKCHAIN_CHOICE)
+        self.db = DatabaseManager()
+        
+        # Load ML models
+        self.clf_model = XGBClassifier()
+        self.reg_model = XGBRegressor()
+        self.clf_model.load_model('models/classifier_model.json')
+        self.reg_model.load_model('models/regressor_model.json')
+        
+        # Initialize tracking
         self.last_check_time = defaultdict(lambda: datetime.now(timezone.utc))
         self.published_posts = set()
-        self.db = Database()
 
-    def ping_server(self, node_url):
-        """Verifica se il nodo è raggiungibile."""
-        try:
-            response = requests.get(node_url, timeout=5)
-            return response.status_code == 200
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error pinging server {node_url}: {e}")
-            return False
-
-    def get_posts(self, usernames, node_urls, platform, max_age_minutes=5):
+    def get_posts(self, usernames, platform, max_age_minutes=5):
+        """Get recent posts for monitored users."""
         post_links = []
         current_time = datetime.now(timezone.utc)
-        logger.info(f"Recuperando post per {len(usernames)} utenti su {platform}")
-
-        for node_url in node_urls:
-            if not self.ping_server(node_url):
-                logger.error(f"Impossibile raggiungere il server: {node_url}")
-                continue  # Prova il nodo successivo
-
-        headers = {'Content-Type': 'application/json'}
+        logger.info(f"Checking posts for {len(usernames)} users on {platform}")
 
         for username in usernames:
-            logger.info(f"Recuperando post per {username} su {platform}")
-            data = {
-                "jsonrpc": "2.0",
-                "method": "condenser_api.get_discussions_by_blog",
-                "params": [{"tag": username, "limit": 1}],
-                "id": 1
-            }
             try:
-                response = requests.post(node_url, headers=headers, data=json.dumps(data), timeout=5)
-                response.raise_for_status()
-                result = response.json().get('result', [])
-                for post in result:
-                    link = post.get('url')
-                    created_time = post.get('created')
-                    if link and created_time:
-                        post_time = datetime.strptime(created_time, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)
-                        post_age = current_time - post_time
-                        age_minutes = post_age.total_seconds() / 60
-                        last_check_time = self.last_check_time[username]
-                        # logger.info(f"Post trovato: {link} - {post_time} - età: {post_age}")
-                        # logger.info(f"Ultimo controllo per {username}: {self.last_check_time[username]}")
-                        # logger.info(f"Età del post: {post_age.total_seconds() / 60} minuti")
-                        # logger.info(f"Massimo tempo di pubblicazione: {max_age_minutes} minuti")
-
-                        if link in self.published_posts:
-                            logger.info(f"Il post è già stato pubblicato: {link}")
-                            continue
-
-                        if age_minutes <= max_age_minutes:
-                            logger.info(f"Post pubblicato di recente: {link}")
-                            post_links.append(link)
-                            self.published_posts.add(link)
-                            self.last_check_time[username] = post_time
-                        else:
-                            logger.info(f"Post non pubblicato di recente: {link} - età: {post_age}")
+                # Get user's recent posts
+                account = self.beem.get_account_info(username)
+                # blog_posts = account.get_blog()[:1]  # Get most recent post
+                post = account.get_blog()[00]
+                
+                created_time = post['created']
+                post_age = current_time - created_time
+                age_minutes = post_age.total_seconds() / 60
+                
+                if age_minutes <= max_age_minutes and post['url'] not in self.published_posts:
+                    # Get post features for prediction
+                    author_stats = self.db.get_author_stats(username, platform)
+                    
+                    if author_stats:
+                        features = {
+                            'author_avg_efficiency': author_stats['avg_efficiency'],
+                            'author_reputation': author_stats['reputation'],
+                            'author_avg_payout': author_stats['avg_payout']
+                        }
+                        
+                        # Make prediction
+                        vote_decision = self.clf_model.predict([list(features.values())])[0]
+                        
+                        if vote_decision == 1:
+                            post_links.append({
+                                'url': post['url'],
+                                'author': username,
+                                'created': created_time
+                            })
+                            self.published_posts.add(post['url'])
+                            logger.info(f"Found voteable post: {post['url']}")
+                        
             except Exception as e:
-                logger.error(f"Errore durante la recuperazione dei post per {username} su {platform}: {e}")
+                logger.error(f"Error processing posts for {username}: {str(e)}")
+                continue
 
-        logger.info(f"Recuperati {len(post_links)} post per {len(usernames)} utenti su {platform}")
         return post_links
-    
-    def update_user_data(self):
-        """Aggiorna i dati degli utenti dal database."""
-        steem_usernames = [user['username'] for user in self.db.get_users() if user['platform'] == 'STEEM']
-        hive_usernames = [user['username'] for user in self.db.get_users() if user['platform'] == 'HIVE']
-        return steem_usernames, hive_usernames
 
-    def publish_posts(self):
-        """Ciclo principale per pubblicare i nuovi post trovati."""
-        published_links = {"steem": set(), "hive": set()}
+    def process_votes(self):
+        """Main loop for monitoring and voting on posts."""
+        while True:
+            try:
+                # Get monitored users from database
+                steem_users = self.db.get_all_authors("STEEM")
+                hive_users = self.db.get_all_authors("HIVE")
+                
+                logger.info(f"Monitoring {len(steem_users)} STEEM users and {len(hive_users)} HIVE users")
+                
+                # Process one platform at a time to avoid timeouts
+                if steem_users:
+                    try:
+                        posts = self.get_posts(
+                            [user['author_name'] for user in steem_users], 
+                            "STEEM"
+                        )
+                        self._process_platform_posts(posts, "STEEM")
+                    except Exception as e:
+                        logger.error(f"Error processing STEEM posts: {str(e)}")
+                
+                if hive_users:
+                    try:
+                        posts = self.get_posts(
+                            [user['author_name'] for user in hive_users], 
+                            "HIVE"
+                        )
+                        self._process_platform_posts(posts, "HIVE")
+                    except Exception as e:
+                        logger.error(f"Error processing HIVE posts: {str(e)}")
+                
+                time.sleep(15)  # Check every 15 seconds
+                
+            except Exception as e:
+                logger.error(f"Error in main loop: {str(e)}")
+                time.sleep(60)  # Wait longer on error
 
-        steem_usernames, hive_usernames = self.update_user_data()
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            while True:
-                steem_usernames, hive_usernames = self.update_user_data()
-
-                futures = []
-                if steem_usernames:
-                    futures.append(
-                        executor.submit(self.get_posts, steem_usernames, self.nodes['steem'], 'Steem')
+    def _process_platform_posts(self, posts, platform):
+        """Process posts for a specific platform."""
+        if not posts:
+            return
+            
+        for post in posts:
+            try:
+                curator = self.steem_curator if platform == "STEEM" else self.hive_curator
+                voting_power = self.beem.calculate_voting_power(curator)
+                
+                message = (
+                    f"[{platform}] Found voteable post!\n"
+                    f"Author: {post['author']}\n"
+                    f"VP: {voting_power}%\n"
+                    f"URL: {post['url']}"
+                )
+                self.send_telegram_message(self.TOKEN, self.admin_id, message)
+                
+                if voting_power > 89:
+                    self._execute_vote(post, platform, curator)
+                else:
+                    self.send_telegram_message(
+                        self.TOKEN, 
+                        self.admin_id, 
+                        f"⚠️ VP too low ({voting_power}%), skipping vote"
                     )
-                if hive_usernames:
-                    futures.append(
-                        executor.submit(self.get_posts, hive_usernames, self.nodes['hive'], 'Hive')
-                    )
-
-                for future, platform in zip(futures, ["steem", "hive"]):
-                    links = future.result()
-                    new_links = [link for link in links if link not in published_links[platform]]
-                    if new_links:
-                        domain = steem_domain if platform == "steem" else hive_domain
-                        logger.info(f"[{platform.upper()}] New post links: {domain}{new_links}")
-                        published_links[platform].update(new_links)
-                        for link in new_links:
-                            post_link = f"{domain}{link}"
-                            if platform.upper() == "STEEM":
-                                steem_curator_info = self.beem.get_account_info(self.steem_curator)
-                                last_vote_time = steem_curator_info['result'][0]['last_vote_time']
-                                steem_voting_power = self.beem.calculate_voting_power(self.steem_curator)
-                                telegram_message = f"[{platform.upper()}] (VP: {steem_voting_power})\n{post_link}"
-                                self.send_telegram_message(self.TOKEN, self.admin_id, telegram_message)
-                                author = self.beem.get_steem_author(post_link)
-                                permlink = self.beem.get_steem_permlink(post_link)
-                                if steem_voting_power > 89:
-                                    time.sleep(30)
-                                    self.beem.like_steem_post(voter=self.steem_curator, voted=author, permlink=permlink, private_posting_key=self.steem_curator_posting_key, weight=100)
-                                    self.send_telegram_message(self.TOKEN, self.admin_id, "Voted!")
-                                else:
-                                    self.send_telegram_message(self.TOKEN, self.admin_id, "Not Voted!")
-                            elif platform.upper() == "HIVE":
-                                hive_curator_info = self.beem.get_hive_profile_info(self.hive_curator)
-                                last_vote_time = hive_curator_info['result'][0]['last_vote_time']
-                                old_hive_voting_power = hive_curator_info['result'][0]['voting_power'] / 100
-                                hive_voting_power = self.beem.calculate_voting_power(last_vote_time, old_hive_voting_power)
-                                telegram_message = f"[{platform.upper()}] (VP: {hive_voting_power})\n{post_link}"
-                                self.send_telegram_message(self.TOKEN, self.admin_id, telegram_message)
-                                author = self.beem.get_hive_author(post_link)
-                                permlink = self.beem.get_hive_permlink(post_link)
-                                if hive_voting_power > 89:
-                                    time.sleep(30)
-                                    self.beem.like_hive_post(voter=self.hive_curator, voted=author, permlink=permlink, private_posting_key=self.hive_curator_posting_key, weight=100)
-                                    self.send_telegram_message(self.TOKEN, self.admin_id, "Voted!")                                   
-                                else:
-                                    self.send_telegram_message(self.TOKEN, self.admin_id, "Not Voted!")
-                time.sleep(15)  # Controlla ogni 15 secondi
+                    
+            except Exception as e:
+                logger.error(f"Error processing post {post['url']}: {str(e)}")
+                continue
 
     def send_telegram_message(self, bot_token, chat_id, message):
+        """Send notification via Telegram."""
         try:
-            url = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={chat_id}&text={message}"
-            response = requests.get(url)
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            data = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "HTML"
+            }
+            response = requests.post(url, json=data)
             return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error telegram server {e}")
+        except Exception as e:
+            logger.error(f"Telegram notification failed: {str(e)}")
             return False
 
 if __name__ == '__main__':
     CONFIG_PATH = "config.json"
-    publisher = SocialMediaPublisher(CONFIG_PATH)
-    publisher.publish_posts()
+    sniper = VoteSniper(CONFIG_PATH)
+    sniper.process_votes()
