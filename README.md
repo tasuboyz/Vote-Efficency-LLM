@@ -10,20 +10,18 @@ This is a machine learning bot designed to optimize voting efficiency on STEEM a
 
 ```python
 # filepath: /settings/keys.py
-POSTING_KEY = "your_posting_key_here"
-ACTIVE_KEY = "your_active_key_here"
+steem_posting_key = "your_posting_key_here"
+hive_posting_key = "your_posting_key_here"
 ```
 
 2. Create `config.json` in the root folder:
 
 ```json
 {
-    "admin_id": "your_telegram_user_id",
-    "TOKEN": "your_telegram_bot_token",
-    "steem_curator": "your_steem_username",
-    "hive_curator": "your_hive_username",
-    "posting_key_steem": "your_steem_posting_key",
-    "posting_key_hive": "your_hive_posting_key"
+    "admin_id": "YOUR TELEGRAM ID",
+    "TOKEN": "TOKEN",
+    "steem_curator": "tasuboyz",
+    "hive_curator": "menny.trx",
 }
 ```
 
