@@ -2,7 +2,11 @@
 
 # Blockchain configuration
 BLOCKCHAIN_CHOICE = "STEEM"  # Options: "HIVE" or "STEEM"
-CURATOR = "karja"
+CURATOR = "tasuboyz"
+
+log_level = "ERROR"
+
+log_file_path = "log.txt"
 
 # Node configurations
 STEEM_NODES = [

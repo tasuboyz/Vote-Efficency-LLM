@@ -1,13 +1,24 @@
-"""Logging configuration for the Vote Efficiency LLM."""
 import logging
+import sys
+from . import config
 
-def setup_logging():
-    """Configure logging settings."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
-    )
-    return logging.getLogger(__name__)
+# Configurazione del logger
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=config.log_level,  # Imposta su DEBUG in modo da includere tutti i livelli di log
+)
 
-# Create logger instance
-logger = setup_logging()
+# Crea un logger
+logger = logging.getLogger(__name__)
+
+# Imposta un gestore per il livello INFO
+info_handler = logging.StreamHandler(sys.stdout)
+info_handler.setLevel(logging.INFO)
+info_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+logger.addHandler(info_handler)
+
+# Imposta un gestore per il livello ERROR
+error_handler = logging.FileHandler(config.log_file_path, mode='a')
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(error_handler)
